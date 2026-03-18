@@ -1,0 +1,44 @@
+---
+title: "SSML_London_Term_Project"
+---
+
+## Init packages
+
+Default packages as used in the labs.
+
+```{r}
+if (!require("easypackages")) install.packages("easypackages") #easy package manager
+
+#install and load libraries
+#In this practical we need an additional package to run the GWR models, this package is called "GWmodel"
+easypackages::packages ("sf", "sp", "spdep", "spatialreg", "GWmodel", "tmap", "mapview", "car", "RColorBrewer", 
+                        "cowplot", "leafsync", "leaflet.extras2", "mapview", "tidyverse", "readr")
+
+#clean your environment
+rm(list=ls())
+```
+
+```{r}
+london_ward_data <- read.csv("data/raw_london_ward_data.csv", header=TRUE, sep=";", dec=",", stringsAsFactors=FALSE)
+
+```
+
+```{r}
+wards <- st_read("data/london_wards.gpkg")
+```
+
+```{r}
+ward_data_polygons <- merge(london_ward_data, wards, by.x = 'New.ward.code', by.y = 'GSS_CODE')
+
+ward_data_polygons <- select(ward_data_polygons, -"BOROUGH") # Remove duplicate column
+```
+
+```{r}
+st_write(mydata, dsn = 'data/ward_poly.gpkg')
+```
+
+```{r}
+# Check if objects are equal
+x <- st_read('data/ward_poly.gpkg')
+all(x == ward_data_polygons)
+```
