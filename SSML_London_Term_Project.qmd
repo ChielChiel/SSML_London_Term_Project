@@ -20,7 +20,6 @@ rm(list=ls())
 
 ```{r}
 london_ward_data <- read.csv("data/raw_london_ward_data.csv", header=TRUE, sep=";", dec=",", stringsAsFactors=FALSE)
-
 ```
 
 ```{r}
@@ -31,6 +30,13 @@ wards <- st_read("data/london_wards.gpkg")
 ward_data_polygons <- merge(london_ward_data, wards, by.x = 'New.ward.code', by.y = 'GSS_CODE')
 
 ward_data_polygons <- select(ward_data_polygons, -"BOROUGH") # Remove duplicate column
+```
+
+```{r}
+annual_ndvi_2013 <- read.csv("data/outputs_ndvi_2013/ward_ndvi_annual_2013.csv", stringsAsFactors = FALSE)
+
+ward_data_polygons <- merge(ward_data_polygons,annual_ndvi_2013[, c("New.ward.code", "annual_ndvi_2013")], by = "New.ward.code",all.x = TRUE)
+
 ```
 
 ```{r}
