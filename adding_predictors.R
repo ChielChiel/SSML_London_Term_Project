@@ -9,9 +9,11 @@ brownfield.data <- read.csv("data/brownfield_and_noise/areas/brownfield.csv")
 noise.data <- read.csv("data/brownfield_and_noise/areas/noise_polution.csv")
 ndvi.data <- read.csv("data/outputs_ndvi_2013/ward_ndvi_annual_2013.csv")|>
   select(-months_with_data)
+air.data <- read.csv("data/air_pollution/air_polution.csv")
 
 data <- left_join(data, brownfield.data, by = join_by(New.ward.code == GSS_CODE), suffix = c("", ""))
 data <- left_join(data, noise.data, by = join_by(New.ward.code == GSS_CODE), suffix = c("", ""))
 data <- left_join(data, ndvi.data, join_by(New.ward.code), suffix = c("", ""))
+data <- left_join(data, air.data, join_by(New.ward.code == GSS_CODE), suffix = c("", ""))
 
 st_write(data, dsn = 'data/ward_poly.gpkg', delete_dsn = TRUE)
