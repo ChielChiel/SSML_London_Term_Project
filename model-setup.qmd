@@ -3,3 +3,214 @@ title: "model-setup"
 format: html
 ---
 
+```{r}
+if (!require("easypackages")) install.packages("easypackages") #easy package manager
+
+#install and load libraries
+#In this practical we need an additional package to run the GWR models, this package is called "GWmodel"
+easypackages::packages ("sf", "sp", "spdep", "spatialreg", "GWmodel", "tmap", "mapview", "car", "RColorBrewer", "cowplot", "leafsync", "leaflet.extras2", "mapview", "tidyverse", "readr")
+```
+
+## Data wrangling for modelling
+
+```{r}
+#clean your environment
+rm(list=ls())
+london_ward_data <- st_read('data/ward_poly.gpkg')
+
+names(london_ward_data)
+```
+
+```{r}
+columns_to_use <- c(
+  "Subjective.well.being.average.score..2013",
+  "Life.Expectancy.2009.13",
+  "Childhood.Obesity.2013",
+  "Incapacity.Benefit.rate...2013",
+  "Unemployment.rate.2013",
+  "Crime.rate...2013",
+  "Deliberate.Fires...2013",
+  "GCSE.point.scores...2013",
+  "Unauthorised.Absence.in.All.Schools.......2013",
+  "X..dependent.children.in.out.of.work.households...2013",
+  "Public.Transport.Accessibility...2013",
+  "Homes.with.access.to.open.space...nature..and...greenspace...2013",
+  "proportion_brownfield",
+  "Rail_Lden_London_55.0.59.9",
+  "Rail_Lden_London_60.0.64.9",
+  "Rail_Lden_London_65.0.69.9",
+  "Rail_Lden_London_70.0.74.9",
+  "Rail_Lden_London_..75.0",
+  "Road_Lden_London_55.0.59.9",
+  "Road_Lden_London_60.0.64.9",
+  "Road_Lden_London_65.0.69.9",
+  "Road_Lden_London_70.0.74.9",
+  "Road_Lden_London_..75.0",
+  "annual_ndvi_2013",
+  "co2",                                                              
+  "nox",                                                             
+  "pm10",                                                             
+  "pm2.5"
+  )
+
+new_column_names <- c(
+  "SubWellBeing",
+  "LifeExp",
+  "ChildObesity",
+  "IncBenefitRate",
+  "UnempRate",
+  "CrimeRate",
+  "DelibFires",
+  "GCSEScores",
+  "UnauthAbsence",
+  "DepChildUnempHouseholds",
+  "PubTransAccess",
+  "HomesOpenAccessNatGreen",
+  "BrownfieldProp",
+  "RailDen55",
+  "RailDen60",
+  "RailDen65",
+  "RailDen70",
+  "RailDen75",
+  "RoadDen55",
+  "RoadDen60",
+  "RoadDen65",
+  "RoadDen70",
+  "RoadDen75",
+  "Ndvi",
+  "C02",
+  "NOX",
+  "PM10",
+  "PM25",
+  "geom"
+)
+length(columns_to_use)
+length(new_column_names)
+```
+
+```{r}
+ward_wellbeing <- london_ward_data |> 
+  select(all_of(columns_to_use))
+
+names(ward_wellbeing) <- new_column_names
+```
+
+## Modelling
+
+### Equations
+
+```{r}
+eq_wellb_no_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
+    CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds
+eq_wellb_std_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
+    CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds + 
+    PubTransAccess + HomesOpenAccessNatGreen
+
+eq_wellb_all_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
+    CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds + 
+    PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailDen55 + RailDen60 + RailDen65 + RailDen70 + RailDen75 + RoadDen55 + RoadDen60 + RoadDen65 + RoadDen70 + RoadDen75 + Ndvi + C02 + NOX + PM10 + PM25
+
+equations <- c(eq_wellb_no_spatial, eq_wellb_std_spatial, eq_wellb_all_spatial)
+```
+
+### Error model stuff
+
+```{r}
+#creating adjacency matrix, 
+ward_wellbeing_nbq <- poly2nb(ward_wellbeing, queen=TRUE) #Queen’s Contiguity neighborhood
+ward_wellbeing_nbq_w <- nb2listw(ward_wellbeing_nbq, style="W") #Queen’s neighborhood wights
+```
+
+```{r}
+#running spatial error model with same weight matrix created previously
+spa_errmodel = errorsarlm(eq_wellb_no_spatial,
+                          data = ward_wellbeing, 
+                          listw = ward_wellbeing_nbq_w, 
+                          zero.policy = TRUE)
+
+summary(spa_errmodel, Nagelkerke=T)
+```
+
+```{r}
+#check residual autocorrelation
+mcSEM_global <- moran.mc(spa_errmodel$residuals, 
+                         ward_wellbeing_nbq_w, 
+                         2999, 
+                         alternative="greater")
+
+plot(mcSEM_global)
+
+mcSEM_global
+```
+
+```{r}
+#add the residual to polygon and plot
+ward_wellbeing$res_sem <- residuals(spa_errmodel)
+#plot using t-map
+semres <- qtm(ward_wellbeing, "res_sem")
+ 
+semres
+```
+
+```{r}
+sac_model <- sacsarlm(
+  formula = eq_wellb_no_spatial,
+  data = ward_wellbeing,
+  listw = ward_wellbeing_nbq_w
+  )
+ 
+summary(sac_model)
+```
+
+```{r}
+#add the residual to polygon and plot
+ward_wellbeing$res_sac <- residuals(sac_model)
+ 
+#plot using t-map
+sacres <-qtm(ward_wellbeing, "res_sac")
+
+sacres
+```
+
+### GWR stuff
+
+```{r}
+#Before we do any analysis for GWR we need to convert our imported sf object into a sp spatial object. As the GWmodel package usually works on sp objects
+#converting the sf polygon into sp object
+ward_wellbeing_sp <- as_Spatial(ward_wellbeing)
+```
+
+```{r}
+gwr_fitting <- function(equation, kernel="gaussian") {
+  abw <- bw.gwr(equation,
+              approach = "AIC", #specified by CV for cross-validation approach or by AIC corrected (AICc), we used AIC 
+              adaptive = TRUE,
+              kernel = "gaussian", #this can be different function e.g., bisquare,exponential, depend on the prior understanding or choice of the modeler
+              data = ward_wellbeing_sp) #give the sp data created earlier
+
+  #print the number of neighbors
+  print(paste0("kernel distance:", abw))
+
+  #fitting the model with gwr.basic function
+  a.gwr <- gwr.basic(equation, #the equation
+                   adaptive = TRUE,
+                   kernel = "gaussian", #indicate the Kernel again
+                   bw = abw, #give the optimal bandwidth we found in the last stage
+                   data = ward_wellbeing_sp)
+  
+  GWR_AIC <- a.gwr$GW.diagnostic$AIC
+  print(paste0("AIC", GWR_AIC))
+  GWR_AIC
+}
+
+
+z <- gwr_fitting(eq_wellb_no_spatial)
+```
+
+```{r}
+for (eq in equations) {
+  gwr_fitting(eq)
+}
+```
+
+### Implement MGWR here.
