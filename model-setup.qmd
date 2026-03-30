@@ -8,7 +8,7 @@ if (!require("easypackages")) install.packages("easypackages") #easy package man
 
 #install and load libraries
 #In this practical we need an additional package to run the GWR models, this package is called "GWmodel"
-easypackages::packages ("sf", "sp", "spdep", "spatialreg", "GWmodel", "tmap", "mapview", "car", "RColorBrewer", "cowplot", "leafsync", "leaflet.extras2", "mapview", "tidyverse", "readr")
+easypackages::packages ("sf", "sp", "spdep", "spatialreg", "GWmodel", "tmap", "mapview", "car", "RColorBrewer", "cowplot", "leafsync", "leaflet.extras2", "mapview", "tidyverse", "readr", "lmtest", "tseries")
 ```
 
 ## Data wrangling for modelling
@@ -77,12 +77,12 @@ new_column_names <- c(
   "RoadDen65",
   "RoadDen70",
   "RoadDen75",
-  "Ndvi",
-  "C02",
+  "NDVI",
+  "CO2",
   "NOX",
   "PM10",
   "PM25",
-  "geom"
+  "geom" # For our polygons
 )
 length(columns_to_use)
 length(new_column_names)
@@ -97,29 +97,218 @@ names(ward_wellbeing) <- new_column_names
 
 ## Modelling
 
+### Spatial autocorrelation?
+
+```{r}
+#creating adjacency matrix, 
+ward_wellbeing_nbq <- poly2nb(ward_wellbeing, queen=TRUE) #Queen’s Contiguity neighborhood
+ward_wellbeing_nbq_w <- nb2listw(ward_wellbeing_nbq, style="W", zero.policy = TRUE) #Queen’s neighborhood wights
+```
+
+```{r}
+WellBeingPlot <- ggplot(data = ward_wellbeing) +
+geom_density(alpha=0.8, colour="black", fill="lightblue", aes(x = SubWellBeing)) +
+   theme_classic()
+
+#plot the Green space availability variable
+LifeExpPlot <- ggplot(data = ward_wellbeing) +
+geom_density(alpha=0.8, colour="black", fill="green3", aes(x = CrimeRate)) +
+   theme_classic()
+
+plot_grid(WellBeingPlot, LifeExpPlot, labels = "AUTO")
+```
+
+```{r}
+SubWBmap <- mapview::mapview(ward_wellbeing, zcol = "SubWellBeing", col.regions=brewer.pal(9, "YlOrRd"))
+
+HomeAcmap <- mapview::mapview(ward_wellbeing, zcol = "CrimeRate", col.regions=brewer.pal(9, "Greens"))
+
+#Two maps with slider to compare the spatial distribution of the variables in all the neighborhoods
+SubWBmap | HomeAcmap 
+```
+
+```{r}
+coordsW <- ward_wellbeing |> 
+  st_centroid() |> 
+  st_geometry()
+
+#let us see the adjacency matrix created by Queen’s Contiguity structure
+plot(ward_wellbeing_nbq, st_geometry(coordsW), col="red")
+```
+
+```{r}
+#Usually we use the moran.test function to get the Moran’s I, but that method is sensitive to irregularly distributed polygons. So we would use Monte Carlo method to bootstrap different polygon distribution. Here moran.mc() funtion does the job
+mc_global <- moran.mc(ward_wellbeing$SubWellBeing, ward_wellbeing_nbq_w, 2999, alternative="greater") #here 2999 is the simulation number, if taking too long you can also use 999
+
+#plot the  Moran’s I
+plot(mc_global)
+```
+
+```{r}
+mc_global
+```
+
+```{r}
+# calculate the local Moran's I
+gm_wellbeing_LISA <- localmoran(ward_wellbeing$SubWellBeing, ward_wellbeing_nbq_w)  #using Queen's contiguity 
+summary(gm_wellbeing_LISA)
+```
+
+```{r}
+# to visualize this statistic the relevant information needs to be extracted
+# extract local Moran's I values and attache them to our sf object 
+ward_wellbeing$gm_wellbeing_LISA <- gm_wellbeing_LISA[,1] 
+# extract p-values
+ward_wellbeing$gm_wellbeing_LISA_p <- gm_wellbeing_LISA[,5] 
+
+#Here we can map the local Moran's I with t-map, and show which areas have significant clusters
+map_LISA <- tm_shape(ward_wellbeing) + 
+  tm_polygons(col= "gm_wellbeing_LISA", title= "Local Moran’s I", midpoint=0,
+              palette = "RdYlBu", breaks= c(-10, -5, 0, 5, 10, 20))
+
+map_LISA_p <- tm_shape(ward_wellbeing) + 
+  tm_polygons(col= "gm_wellbeing_LISA_p", title= "p-values",
+              breaks= c(0, 0.01, 0.05, 1), palette = "Reds")
+```
+
+```{r}
+tmap_arrange(map_LISA, map_LISA_p)
+```
+
+```{r}
+significanceLevel <- 0.05; # 95% confidence, define what level of significance we will accept for a cluster to be statistically significant
+meanVal <- mean(ward_wellbeing$SubWellBeing); #take the mean value of the variable under consideration
+
+gm_wellbeing_LISA_type <- gm_wellbeing_LISA #we create a new object to make sure previous reults is available to us
+
+#create an object storing the LISA values into different classes of significance
+gm_wellbeing_LISA_mapping <- gm_wellbeing_LISA_type %>% tibble::as_tibble() %>%
+  magrittr::set_colnames(c("Ii","E.Ii","Var.Ii","Z.Ii","Pr(z > 0)")) %>%
+  dplyr::mutate(coType = dplyr::case_when(
+  `Pr(z > 0)` > 0.05 ~ "Insignificant", #greater than 0.05, thus Insignificant 
+  `Pr(z > 0)` <= 0.05 & Ii >= 0 & ward_wellbeing$SubWellBeing >= meanVal ~ "HH", #High-High local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii >= 0 & ward_wellbeing$SubWellBeing < meanVal ~ "LL", #Low-Low local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii < 0 & ward_wellbeing$SubWellBeing >= meanVal ~ "HL", #High-Low local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii < 0 & ward_wellbeing$SubWellBeing < meanVal ~ "LH" #Low-High local Moran's I values
+))
+
+#Join back to the main polygon data
+ward_wellbeing$coType <- gm_wellbeing_LISA_mapping$coType %>% tidyr::replace_na("Insignificant")
+
+#map it
+ggplot(ward_wellbeing) +
+  geom_sf(aes(fill=coType)) +
+  scale_fill_manual(values = c('red','brown','NA','blue','cyan'), name='Clusters & \nOutliers') +
+  labs(title = "Subjective wellbeing clusters") + 
+  theme (panel.background = element_rect(fill='transparent'))
+```
+
 ### Equations
 
 ```{r}
 eq_wellb_no_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
     CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds
+
 eq_wellb_std_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
     CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds + 
     PubTransAccess + HomesOpenAccessNatGreen
 
 eq_wellb_all_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
     CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds + 
-    PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailDen55 + RailDen60 + RailDen65 + RailDen70 + RailDen75 + RoadDen55 + RoadDen60 + RoadDen65 + RoadDen70 + RoadDen75 + Ndvi + C02 + NOX + PM10 + PM25
+    PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailDen55 + RailDen60 + RailDen65 + RailDen70 + RailDen75 + RoadDen55 + RoadDen60 + RoadDen65 + RoadDen70 + RoadDen75 + NDVI + CO2 + NOX + PM10 + PM25
 
 equations <- c(eq_wellb_no_spatial, eq_wellb_std_spatial, eq_wellb_all_spatial)
 ```
 
-### Error model stuff
+### Basic non-spatial OLS
 
 ```{r}
-#creating adjacency matrix, 
-ward_wellbeing_nbq <- poly2nb(ward_wellbeing, queen=TRUE) #Queen’s Contiguity neighborhood
-ward_wellbeing_nbq_w <- nb2listw(ward_wellbeing_nbq, style="W") #Queen’s neighborhood wights
+
+for (eq in equations) {
+  linearMod <- lm(eq, data = ward_wellbeing)
+  #get summary
+  print("Equation:")
+  print(eq)
+  print("OLS model result of equation:")
+  print(summary(linearMod))
+  #check multicollinearity, seems okay, most VIF below 5. DepChildUnempHouseholds always above 5. Noise and air pollution mostly above 5. NOX and RoadDEN65 ~ 9.3
+  print("Variance Inflation Factors:")
+  print(vif(linearMod))
+  print("=================")
+}
 ```
+
+```{r}
+linearMod_no_spatial <- lm(eq_wellb_no_spatial, data = ward_wellbeing)
+summary(linearMod_no_spatial)
+  #check multicollinearity, seems okay, most VIF below 5. DepChildUnempHouseholds always above 5. Noise and air pollution mostly above 5. NOX and RoadDEN65 ~ 9.3
+vif(linearMod_no_spatial)
+
+```
+
+```{r}
+#homoscedasticity test using plots 
+par(mfrow=c(2,2))
+plot(linearMod_no_spatial)
+
+#plot top-left shows minor indication of heteroscedasticity
+
+#homoscedasticity can be tested using Breusch-Pagan test does
+bptest(linearMod_no_spatial) #significant Breusch-Pagan test indicates presence of heteroscedasticity. Since p-value = 0.0007279, we have heteroscedasticity.
+
+# for normal distribution of error, we use Jarque–Bera test 
+#Jarque–Bera test 
+jarque.bera.test(residuals(linearMod_no_spatial)) #significant Jarque–Bera test indicates presence non-normally distributed residuals. since p-value = 0.001124, we have non-normally distributed residuals.
+```
+
+```{r}
+#Usually we use the moran.test function to get the Moran’s I, but that method is sensitive to irregularly distributed polygons. So we would use Monte Carlo method to bootstrap different polygon distribution. Here moran.mc() funtion does the job
+mc_global_OLS <- moran.mc(linearMod_no_spatial$residuals, ward_wellbeing_nbq_w, 2999, zero.policy= TRUE, alternative="greater")
+
+#plot the  Moran’s I
+plot(mc_global_OLS)
+mc_global_OLS
+
+# As the p value is significant we reject the null hypothesis that there is no significant autocorrelations among the variable, and accept that, the residual has spatial clustering
+```
+
+```{r}
+#Now plot the residual on the polygon
+ward_wellbeing$res_lm <- residuals(linearMod_no_spatial)
+lmres <- qtm(ward_wellbeing, "res_lm")
+lmres 
+```
+
+```{r}
+linearMod_std_spatial <- lm(eq_wellb_std_spatial, data = ward_wellbeing)
+summary(linearMod_std_spatial)
+  #check multicollinearity, seems okay, most VIF below 5. DepChildUnempHouseholds always above 5. Noise and air pollution mostly above 5. NOX and RoadDEN65 ~ 9.3
+vif(linearMod_std_spatial)
+```
+
+```{r}
+linearMod_all_spatial <- lm(eq_wellb_all_spatial, data = ward_wellbeing)
+summary(linearMod_all_spatial)
+  #check multicollinearity, seems okay, most VIF below 5. DepChildUnempHouseholds always above 5. Noise and air pollution mostly above 5. NOX and RoadDEN65 ~ 9.3
+vif(linearMod_all_spatial)
+```
+
+### Spatial error stuff
+
+```{r}
+res <- lm.RStests(linearMod_no_spatial, listw = ward_wellbeing_nbq_w, test="all") #here we give the model and W matrix w created earlier
+```
+
+```{r}
+tres <- t(sapply(res, function(x) c(x$statistic, x$parameter, x$p.value))) #create a table format from the results of lm.LMtests
+
+colnames(tres) <- c("Statistic", "df", "p-value") #rename the columns
+
+#print the table
+tres
+```
+
+SARMA has the largest statistic and is significant, thus we might need to go for that spatial autoregressive moving average. But spatial error and certainly lag are not far off.
 
 ```{r}
 #running spatial error model with same weight matrix created previously
@@ -160,6 +349,18 @@ sac_model <- sacsarlm(
   )
  
 summary(sac_model)
+```
+
+```{r}
+#check residual autocorrelation
+mcSAC_global <- moran.mc(sac_model$residuals, 
+                         ward_wellbeing_nbq_w, 
+                         2999, 
+                         alternative="greater")
+
+plot(mcSAC_global)
+
+mcSAC_global
 ```
 
 ```{r}
