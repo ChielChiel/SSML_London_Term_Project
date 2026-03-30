@@ -349,6 +349,22 @@ sac_model <- sacsarlm(
   )
  
 summary(sac_model)
+
+sac_model <- sacsarlm(
+  formula = eq_wellb_std_spatial,
+  data = ward_wellbeing,
+  listw = ward_wellbeing_nbq_w
+  )
+ 
+summary(sac_model)
+
+sac_model <- sacsarlm(
+  formula = eq_wellb_all_spatial,
+  data = ward_wellbeing,
+  listw = ward_wellbeing_nbq_w
+  )
+ 
+summary(sac_model)
 ```
 
 ```{r}
@@ -386,7 +402,7 @@ gwr_fitting <- function(equation, kernel="gaussian") {
   abw <- bw.gwr(equation,
               approach = "AIC", #specified by CV for cross-validation approach or by AIC corrected (AICc), we used AIC 
               adaptive = TRUE,
-              kernel = "gaussian", #this can be different function e.g., bisquare,exponential, depend on the prior understanding or choice of the modeler
+              kernel = kernel, #this can be different function e.g., bisquare,exponential, depend on the prior understanding or choice of the modeler
               data = ward_wellbeing_sp) #give the sp data created earlier
 
   #print the number of neighbors
@@ -395,7 +411,7 @@ gwr_fitting <- function(equation, kernel="gaussian") {
   #fitting the model with gwr.basic function
   a.gwr <- gwr.basic(equation, #the equation
                    adaptive = TRUE,
-                   kernel = "gaussian", #indicate the Kernel again
+                   kernel = kernel, #indicate the Kernel again
                    bw = abw, #give the optimal bandwidth we found in the last stage
                    data = ward_wellbeing_sp)
   
@@ -414,4 +430,42 @@ for (eq in equations) {
 }
 ```
 
-### Implement MGWR here.
+### MGWR - More improvements.
+
+```{r}
+gwr_multiscale_fit <- function(equation, kernel="gaussian") {
+  #fitting the model with gwr.basic function
+  a.gwr <- gwr.multiscale(
+    equation,
+    adaptive = TRUE,
+    kernel = kernel,
+    data = ward_wellbeing_sp,
+    verbose = TRUE
+    # ,parallel.method = "cuda",
+    # parallel.arg = 14
+    
+  )
+    
+  GWR_AIC <- a.gwr$GW.diagnostic$AIC
+  print(paste0("AIC", GWR_AIC))
+  a.gwr
+}
+```
+
+```{r}
+mgwr_no_spatial <- gwr_multiscale_fit(eq_wellb_no_spatial)
+
+# for (eq in equations) {
+#   gwr_multiscale_fit(eq)
+# }
+```
+
+```{r}
+mgwr_std_spatial <- gwr_multiscale_fit(eq_wellb_std_spatial)
+# "AIC-1116.69915706795"
+```
+
+```{r}
+mgwr_all_spatial <- gwr_multiscale_fit(eq_wellb_all_spatial)
+# "AIC-1209.16332570849"
+```
