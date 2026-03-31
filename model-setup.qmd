@@ -86,13 +86,17 @@ new_column_names <- c(
 )
 length(columns_to_use)
 length(new_column_names)
-```
 
-```{r}
 ward_wellbeing <- london_ward_data |> 
   select(all_of(columns_to_use))
 
 names(ward_wellbeing) <- new_column_names
+```
+
+```{r}
+ward_wellbeing <- ward_wellbeing |> 
+  mutate(RailNoise = rowSums(across(c("RailDen55", "RailDen60", "RailDen65", "RailDen70", "RailDen75",)))) |> 
+  mutate(RoadNoise = rowSums(across(c("RoadDen55", "RoadDen60", "RoadDen65", "RoadDen70", "RoadDen75",))))
 ```
 
 ## Modelling
@@ -112,7 +116,7 @@ geom_density(alpha=0.8, colour="black", fill="lightblue", aes(x = SubWellBeing))
 
 #plot the Green space availability variable
 LifeExpPlot <- ggplot(data = ward_wellbeing) +
-geom_density(alpha=0.8, colour="black", fill="green3", aes(x = CrimeRate)) +
+geom_density(alpha=0.8, colour="black", fill="green3", aes(x = GCSEScores)) +
    theme_classic()
 
 plot_grid(WellBeingPlot, LifeExpPlot, labels = "AUTO")
@@ -215,7 +219,7 @@ eq_wellb_std_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate +
 
 eq_wellb_all_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
     CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds + 
-    PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailDen55 + RailDen60 + RailDen65 + RailDen70 + RailDen75 + RoadDen55 + RoadDen60 + RoadDen65 + RoadDen70 + RoadDen75 + NDVI + CO2 + NOX + PM10 + PM25
+    PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailNoise + RoadNoise + NDVI + CO2 + NOX + PM25
 
 equations <- c(eq_wellb_no_spatial, eq_wellb_std_spatial, eq_wellb_all_spatial)
 ```
@@ -296,12 +300,32 @@ vif(linearMod_all_spatial)
 ### Spatial error stuff
 
 ```{r}
-res <- lm.RStests(linearMod_no_spatial, listw = ward_wellbeing_nbq_w, test="all") #here we give the model and W matrix w created earlier
+
 ```
 
 ```{r}
+res <- lm.RStests(linearMod_no_spatial, listw = ward_wellbeing_nbq_w, test="all") #here we give the model and W matrix w created earlier
 tres <- t(sapply(res, function(x) c(x$statistic, x$parameter, x$p.value))) #create a table format from the results of lm.LMtests
+colnames(tres) <- c("Statistic", "df", "p-value") #rename the columns
 
+#print the table
+tres
+```
+
+```{r}
+linearMod_std_spatial <- lm (eq_wellb_std_spatial, data = ward_wellbeing)
+res <- lm.RStests(linearMod_std_spatial, listw = ward_wellbeing_nbq_w, test="all") #here we give the model and W matrix w created earlier
+tres <- t(sapply(res, function(x) c(x$statistic, x$parameter, x$p.value))) #create a table format from the results of lm.LMtests
+colnames(tres) <- c("Statistic", "df", "p-value") #rename the columns
+
+#print the table
+tres
+```
+
+```{r}
+linearMod_all_spatial <- lm(eq_wellb_all_spatial, data = ward_wellbeing)
+res <- lm.RStests(linearMod_all_spatial, listw = ward_wellbeing_nbq_w, test="all") #here we give the model and W matrix w created earlier
+tres <- t(sapply(res, function(x) c(x$statistic, x$parameter, x$p.value))) #create a table format from the results of lm.LMtests
 colnames(tres) <- c("Statistic", "df", "p-value") #rename the columns
 
 #print the table
@@ -313,6 +337,19 @@ SARMA has the largest statistic and is significant, thus we might need to go for
 ```{r}
 #running spatial error model with same weight matrix created previously
 spa_errmodel = errorsarlm(eq_wellb_no_spatial,
+                          data = ward_wellbeing, 
+                          listw = ward_wellbeing_nbq_w, 
+                          zero.policy = TRUE)
+
+summary(spa_errmodel, Nagelkerke=T)
+```
+
+```{r}
+
+
+
+#running spatial error model with same weight matrix created previously
+spa_errmodel = errorsarlm(eq_wellb_all_spatial,
                           data = ward_wellbeing, 
                           listw = ward_wellbeing_nbq_w, 
                           zero.policy = TRUE)
@@ -342,6 +379,11 @@ semres
 ```
 
 ```{r}
+eq_wellb <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
+    CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds + 
+    PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailDen55 + RailDen60 + RailDen65 + RailDen70 + RailDen75 + RoadDen55 + RoadDen60 + RoadDen65 + RoadDen70 + RoadDen75 + NDVI + CO2 + NOX + PM10 + PM25
+
+
 sac_model <- sacsarlm(
   formula = eq_wellb_no_spatial,
   data = ward_wellbeing,
@@ -468,4 +510,8 @@ mgwr_std_spatial <- gwr_multiscale_fit(eq_wellb_std_spatial)
 ```{r}
 mgwr_all_spatial <- gwr_multiscale_fit(eq_wellb_all_spatial)
 # "AIC-1209.16332570849"
+```
+
+```{r}
+
 ```
