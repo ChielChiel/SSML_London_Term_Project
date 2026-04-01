@@ -5,12 +5,15 @@ setwd(this.path::here())
 # data
 ward_wellbeing <- read_sf("data/ward_wellbeing.gpkg")
 
+ward_wellbeing <- ward_wellbeing |>
+  mutate(PM25_k = PM25 * 1000)
+
 
 ########################## equations ####################################
 equation_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
   CrimeRate + DelibFires + GCSEScores + UnauthAbsence + PubTransAccess + 
   HomesOpenAccessNatGreen + BrownfieldProp + RailNoise + RoadNoise + 
-  PM25
+  PM25_k + NDVI
 
 equation_non_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate + 
   CrimeRate + DelibFires + GCSEScores + UnauthAbsence
@@ -35,7 +38,9 @@ step1 <- function(equation){
   lagrange_decision <- NA
   
   mc_global <- moran.mc(residuals, neighbourhood_weights, 2999, zero.policy= TRUE, alternative="greater")$statistic
-  summary.table <- data.frame(lagrange_decision, AIC, mc_global)
+  mc_pval <- moran.mc(residuals, neighbourhood_weights, 2999, zero.policy= TRUE, alternative="greater")$p.value
+  
+  summary.table <- data.frame(lagrange_decision, AIC, mc_global, mc_pval)
 
 }
 
@@ -77,7 +82,9 @@ step2 <- function(equation){
   AIC <- AIC(model)
   
   mc_global <- moran.mc(residuals, neighbourhood_weights, 2999, zero.policy= TRUE, alternative="greater")$statistic
-  summary.table <- data.frame(lagrange_decision, AIC, mc_global)
+  mc_pval <- moran.mc(residuals, neighbourhood_weights, 2999, zero.policy= TRUE, alternative="greater")$p.value
+  
+  summary.table <- data.frame(lagrange_decision, AIC, mc_global, mc_pval)
   
 }
 
@@ -101,7 +108,8 @@ step3 <- function(equation){
   lagrange_decision <- NA
   
   mc_global <- moran.mc(residuals, neighbourhood_weights, 2999, zero.policy= TRUE, alternative="greater")$statistic
-  summary.table <- data.frame(lagrange_decision, AIC, mc_global)
+  mc_pval <- moran.mc(residuals, neighbourhood_weights, 2999, zero.policy= TRUE, alternative="greater")$p.value
+  summary.table <- data.frame(lagrange_decision, AIC, mc_global, mc_pval)
   
 }
 
