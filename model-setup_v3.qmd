@@ -1,0 +1,1119 @@
+---
+title: "model-setup"
+format: html
+---
+
+```{r}
+if (!require("easypackages")) install.packages("easypackages") #easy package manager
+
+#install and load libraries
+#In this practical we need an additional package to run the GWR models, this package is called "GWmodel"
+easypackages::packages ("sf", "sp", "spdep", "spatialreg", "GWmodel", "tmap", "mapview", "car", "RColorBrewer", "cowplot", "leafsync", "leaflet.extras2", "mapview", "tidyverse", "readr", "lmtest", "tseries")
+```
+
+## Data wrangling for modelling
+
+```{r}
+#clean your environment
+rm(list=ls())
+london_ward_data <- st_read('data/ward_poly.gpkg')
+
+names(london_ward_data)
+```
+
+```{r}
+columns_to_use <- c(
+  "Subjective.well.being.average.score..2013",
+  "Life.Expectancy.2009.13",
+  "Childhood.Obesity.2013",
+  "Incapacity.Benefit.rate...2013",
+  "Unemployment.rate.2013",
+  "Crime.rate...2013",
+  "Deliberate.Fires...2013",
+  "GCSE.point.scores...2013",
+  "Unauthorised.Absence.in.All.Schools.......2013",
+  "X..dependent.children.in.out.of.work.households...2013",
+  "Public.Transport.Accessibility...2013",
+  "Homes.with.access.to.open.space...nature..and...greenspace...2013",
+  "proportion_brownfield",
+  "Rail_Lden_London_55.0.59.9",
+  "Rail_Lden_London_60.0.64.9",
+  "Rail_Lden_London_65.0.69.9",
+  "Rail_Lden_London_70.0.74.9",
+  "Rail_Lden_London_..75.0",
+  "Road_Lden_London_55.0.59.9",
+  "Road_Lden_London_60.0.64.9",
+  "Road_Lden_London_65.0.69.9",
+  "Road_Lden_London_70.0.74.9",
+  "Road_Lden_London_..75.0",
+  "annual_ndvi_2013",
+  "co2",                                                              
+  "nox",                                                             
+  "pm10",                                                             
+  "pm2.5"
+  )
+
+new_column_names <- c(
+  "SubWellBeing",
+  "LifeExp",
+  "ChildObesity",
+  "IncBenefitRate",
+  "UnempRate",
+  "CrimeRate",
+  "DelibFires",
+  "GCSEScores",
+  "UnauthAbsence",
+  "DepChildUnempHouseholds",
+  "PubTransAccess",
+  "HomesOpenAccessNatGreen",
+  "BrownfieldProp",
+  "RailDen55",
+  "RailDen60",
+  "RailDen65",
+  "RailDen70",
+  "RailDen75",
+  "RoadDen55",
+  "RoadDen60",
+  "RoadDen65",
+  "RoadDen70",
+  "RoadDen75",
+  "NDVI",
+  "CO2",
+  "NOX",
+  "PM10",
+  "PM25",
+  "geom" # For our polygons
+)
+length(columns_to_use)
+length(new_column_names)
+
+ward_wellbeing <- london_ward_data |> 
+  dplyr::select(all_of(columns_to_use))
+
+names(ward_wellbeing) <- new_column_names
+```
+
+```{r}
+ward_wellbeing <- ward_wellbeing |> 
+  mutate(RailNoise = rowSums(across(c("RailDen55", "RailDen60", "RailDen65", "RailDen70", "RailDen75",)))) |> 
+  mutate(RoadNoise = rowSums(across(c("RoadDen55", "RoadDen60", "RoadDen65", "RoadDen70", "RoadDen75",))))
+ward_wellbeing <- ward_wellbeing |>
+  mutate(PM25_k = PM25 * 1000)
+```
+
+## Modelling
+
+### Spatial autocorrelation?
+
+```{r}
+#creating adjacency matrix, 
+ward_wellbeing_nbq <- poly2nb(ward_wellbeing, queen=TRUE) #Queen’s Contiguity neighborhood
+ward_wellbeing_nbq_w <- nb2listw(ward_wellbeing_nbq, style="W", zero.policy = TRUE) #Queen’s neighborhood wights
+```
+
+```{r}
+WellBeingPlot <- ggplot(data = ward_wellbeing) +
+geom_density(alpha=0.8, colour="black", fill="lightblue", aes(x = SubWellBeing)) +
+   theme_classic()
+
+#plot the Green space availability variable
+LifeExpPlot <- ggplot(data = ward_wellbeing) +
+geom_density(alpha=0.8, colour="black", fill="green3", aes(x = HomesOpenAccessNatGreen)) +
+   theme_classic()
+
+plot_grid(WellBeingPlot, LifeExpPlot, labels = "AUTO")
+```
+
+```{r}
+SubWBmap <- mapview::mapview(ward_wellbeing, zcol = "SubWellBeing", col.regions=brewer.pal(9, "YlOrRd"))
+
+HomeAcmap <- mapview::mapview(ward_wellbeing, zcol = "CrimeRate", col.regions=brewer.pal(9, "Greens"))
+
+#Two maps with slider to compare the spatial distribution of the variables in all the neighborhoods
+SubWBmap | HomeAcmap 
+```
+
+```{r}
+coordsW <- ward_wellbeing |> 
+  st_centroid() |> 
+  st_geometry()
+
+#let us see the adjacency matrix created by Queen’s Contiguity structure
+plot(ward_wellbeing_nbq, st_geometry(coordsW), col="red")
+```
+
+```{r}
+#Usually we use the moran.test function to get the Moran’s I, but that method is sensitive to irregularly distributed polygons. So we would use Monte Carlo method to bootstrap different polygon distribution. Here moran.mc() funtion does the job
+mc_global <- moran.mc(ward_wellbeing$SubWellBeing, ward_wellbeing_nbq_w, 2999, alternative="greater") #here 2999 is the simulation number, if taking too long you can also use 999
+
+#plot the  Moran’s I
+plot(mc_global)
+```
+
+```{r}
+mc_global
+```
+
+```{r}
+# calculate the local Moran's I
+gm_wellbeing_LISA <- localmoran(ward_wellbeing$SubWellBeing, ward_wellbeing_nbq_w)  #using Queen's contiguity 
+summary(gm_wellbeing_LISA)
+```
+
+```{r}
+# to visualize this statistic the relevant information needs to be extracted
+# extract local Moran's I values and attache them to our sf object 
+ward_wellbeing$gm_wellbeing_LISA <- gm_wellbeing_LISA[,1] 
+# extract p-values
+ward_wellbeing$gm_wellbeing_LISA_p <- gm_wellbeing_LISA[,5] 
+
+#Here we can map the local Moran's I with t-map, and show which areas have significant clusters
+map_LISA <- tm_shape(ward_wellbeing) + 
+  tm_polygons(col= "gm_wellbeing_LISA", title= "Local Moran’s I", midpoint=0,
+              palette = "RdYlBu", breaks= c(-10, -5, 0, 5, 10, 20))
+
+map_LISA_p <- tm_shape(ward_wellbeing) + 
+  tm_polygons(col= "gm_wellbeing_LISA_p", title= "p-values",
+              breaks= c(0, 0.01, 0.05, 1), palette = "Reds")
+```
+
+```{r}
+tmap_arrange(map_LISA, map_LISA_p)
+```
+
+```{r}
+significanceLevel <- 0.05; # 95% confidence, define what level of significance we will accept for a cluster to be statistically significant
+meanVal <- mean(ward_wellbeing$SubWellBeing); #take the mean value of the variable under consideration
+
+gm_wellbeing_LISA_type <- gm_wellbeing_LISA #we create a new object to make sure previous reults is available to us
+
+#create an object storing the LISA values into different classes of significance
+gm_wellbeing_LISA_mapping <- gm_wellbeing_LISA_type %>% tibble::as_tibble() %>%
+  magrittr::set_colnames(c("Ii","E.Ii","Var.Ii","Z.Ii","Pr(z > 0)")) %>%
+  dplyr::mutate(coType = dplyr::case_when(
+  `Pr(z > 0)` > 0.05 ~ "Insignificant", #greater than 0.05, thus Insignificant 
+  `Pr(z > 0)` <= 0.05 & Ii >= 0 & ward_wellbeing$SubWellBeing >= meanVal ~ "HH", #High-High local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii >= 0 & ward_wellbeing$SubWellBeing < meanVal ~ "LL", #Low-Low local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii < 0 & ward_wellbeing$SubWellBeing >= meanVal ~ "HL", #High-Low local Moran's I values
+  `Pr(z > 0)` <= 0.05 & Ii < 0 & ward_wellbeing$SubWellBeing < meanVal ~ "LH" #Low-High local Moran's I values
+))
+
+#Join back to the main polygon data
+ward_wellbeing$coType <- gm_wellbeing_LISA_mapping$coType %>% tidyr::replace_na("Insignificant")
+
+#map it
+ggplot(ward_wellbeing) +
+  geom_sf(aes(fill=coType)) +
+  scale_fill_manual(values = c('red','brown','NA','blue','cyan'), name='Clusters & \nOutliers') +
+  labs(title = "Subjective wellbeing clusters") + 
+  theme (panel.background = element_rect(fill='transparent'))
+```
+```{r}
+# correlation matrix for candidate modelling variables
+corr_vars <- ward_wellbeing |>
+  st_drop_geometry() |>
+  dplyr::select(
+    SubWellBeing,
+    LifeExp, ChildObesity, IncBenefitRate, UnempRate, CrimeRate, DelibFires,
+    GCSEScores, UnauthAbsence, DepChildUnempHouseholds,
+    PubTransAccess, HomesOpenAccessNatGreen, BrownfieldProp,
+    RailNoise, RoadNoise, NDVI, CO2, NOX, PM10, PM25, PM25_k
+  )
+
+corr_mat <- cor(corr_vars, use = "pairwise.complete.obs", method = "pearson")
+
+round(corr_mat, 2)
+```
+
+```{r}
+# plotting
+corr_df <- as.data.frame(as.table(corr_mat))
+
+ggplot(corr_df, aes(Var1, Var2, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, limits = c(-1, 1)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_blank()
+  ) +
+  labs(fill = "Correlation")
+```
+
+```{r}
+# find highly correlated pairs
+corr_pairs <- as.data.frame(as.table(corr_mat)) |>
+  filter(Var1 != Var2) |>
+  mutate(abs_corr = abs(Freq)) |>
+  filter(abs_corr >= 0.7) |>
+  rowwise() |>
+  mutate(pair = paste(sort(c(Var1, Var2)), collapse = " - ")) |>
+  ungroup() |>
+  distinct(pair, .keep_all = TRUE) |>
+  dplyr::select(pair, correlation = Freq) |>
+  arrange(desc(abs(correlation)))
+
+corr_pairs
+```
+### Equations
+
+```{r}
+# no spatial
+eq_wellb_no_spatial <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate +
+  CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds
+
+eq_wellb_all_spatial<- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate +
+  CrimeRate + DelibFires + GCSEScores + UnauthAbsence + DepChildUnempHouseholds + PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailNoise + RoadNoise + PM25_k + NDVI + NOX + CO2 + PM10
+
+# trimmed after VIF / correlation checks
+eq_wellb_all_spatial_trimmed <- SubWellBeing ~ LifeExp + ChildObesity + IncBenefitRate + UnempRate +  CrimeRate + DelibFires + GCSEScores + UnauthAbsence + NDVI + 
+PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailNoise + RoadNoise + PM25_k
+
+# trimmed after literature review
+eq_wellb_all_spatial_trimmed_literature <- SubWellBeing ~ LifeExp + IncBenefitRate + UnempRate + CrimeRate + GCSEScores + UnauthAbsence + PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailNoise + RoadNoise + PM25_k + NDVI
+
+# to test GCSEScores/UnauthAbsence 
+
+eq_wellb_all_spatial_trimmed_literature_GCSEScores <- SubWellBeing ~ LifeExp + IncBenefitRate + UnempRate + CrimeRate + GCSEScores  + PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailNoise + RoadNoise + PM25_k + NDVI
+
+eq_wellb_all_spatial_trimmed_literature_UnauthAbsence <- SubWellBeing ~ LifeExp + IncBenefitRate + UnempRate + CrimeRate  + UnauthAbsence + PubTransAccess + HomesOpenAccessNatGreen + BrownfieldProp + RailNoise + RoadNoise + PM25_k + NDVI
+
+# models to compare further
+equations_vif<- list(
+  no_spatial = eq_wellb_no_spatial,
+  all_spatial = eq_wellb_all_spatial,
+  all_spatial_trimmed = eq_wellb_all_spatial_trimmed,
+  spatial_literature = eq_wellb_all_spatial_trimmed_literature,
+  spatial_GCSEScores = eq_wellb_all_spatial_trimmed_literature_GCSEScores,
+  spatial_UnauthAbsence = eq_wellb_all_spatial_trimmed_literature_UnauthAbsence
+)
+
+equations<- list(
+  no_spatial = eq_wellb_no_spatial,
+  all_spatial_trimmed = eq_wellb_all_spatial_trimmed,
+  spatial_literature = eq_wellb_all_spatial_trimmed_literature,
+  spatial_GCSEScores = eq_wellb_all_spatial_trimmed_literature_GCSEScores,
+  spatial_UnauthAbsence = eq_wellb_all_spatial_trimmed_literature_UnauthAbsence
+)
+```
+
+### VIF
+
+```{r}
+vif_equations <- equations_vif
+
+vif_results <- list()
+
+for (nm in names(vif_equations)) {
+  model <- lm(vif_equations[[nm]], data = ward_wellbeing)
+  vif_vals <- vif(model)
+  
+  cat("\n====================================\n")
+  cat("Model:", nm, "\n")
+  print(vif_vals)
+  
+  vif_results[[nm]] <- vif_vals
+}
+```
+
+```{r}
+vif_table <- bind_rows(
+  lapply(names(vif_results), function(nm) {
+    tibble(
+      Model = nm,
+      Variable = names(vif_results[[nm]]),
+      VIF = as.numeric(vif_results[[nm]])
+    )
+  })
+)
+
+vif_table |> arrange(desc(VIF))
+```
+
+```{r}
+vif_flagged <- vif_table |>
+  mutate(
+    VIF_flag = case_when(
+      VIF >= 10 ~ "Severe",
+      VIF >= 5 ~ "High",
+      TRUE ~ "Acceptable"
+    )
+  ) |>
+  arrange(desc(VIF))
+
+vif_flagged
+```
+
+```{r}
+vif_compare_trim <- vif_flagged |>
+  filter(Model %in% c("all_spatial", "all_spatial_trimmed")) |>
+  arrange(Variable, Model)
+
+vif_compare_trim
+```
+
+### Basic non-spatial OLS
+
+```{r}
+run_ols_diagnostics <- function(formula, data, listw, model_name, nsim = 2999) {
+  
+  # fit OLS model
+  model <- lm(formula, data = data)
+  
+  cat("\n====================================\n")
+  cat("Model:", model_name, "\n")
+  cat("Formula:\n")
+  print(formula)
+  
+  cat("\nOLS summary:\n")
+  print(summary(model))
+  
+  cat("\nAIC:\n")
+  print(AIC(model))
+  
+  cat("\nVariance Inflation Factors (VIF):\n")
+  print(vif(model))
+  
+  cat("\nDiagnostic plots:\n")
+  par(mfrow = c(2, 2))
+  plot(model)
+  par(mfrow = c(1, 1))
+  
+  cat("\nBreusch-Pagan test:\n")
+  print(bptest(model))
+  
+  cat("\nJarque-Bera test:\n")
+  print(jarque.bera.test(residuals(model)))
+  
+  cat("\nResidual Moran's I (Monte Carlo):\n")
+  mc_res <- moran.mc(
+    residuals(model),
+    listw,
+    nsim = nsim,
+    zero.policy = TRUE,
+    alternative = "greater"
+  )
+  print(mc_res)
+  
+  # plot Moran's I simulation
+  plot(mc_res)
+  
+  # save residuals back to sf 
+  res_col <- paste0("res_", make.names(model_name))
+  data[[res_col]] <- residuals(model)
+  
+  cat("\nResidual map:\n")
+  print(qtm(data, res_col))
+  
+  invisible(list(
+    model = model,
+    moran = mc_res,
+    data = data,
+    residual_column = res_col
+  ))
+}
+```
+
+```{r}
+ols_results <- list()
+
+for (nm in names(equations)) {
+  ols_results[[nm]] <- run_ols_diagnostics(
+    formula = equations[[nm]],
+    data = ward_wellbeing,
+    listw = ward_wellbeing_nbq_w,
+    model_name = nm
+  )
+}
+```
+
+
+```{r}
+ols_compare_all <- tibble(
+  Model = names(ols_results),
+  AIC = sapply(ols_results, function(x) AIC(x$model)),
+  Moran_I = sapply(ols_results, function(x) as.numeric(x$moran$statistic))
+) |>
+  mutate(
+    Abs_Moran_I = abs(Moran_I)
+  ) |>
+  arrange(AIC)
+
+ols_compare_all
+```
+
+```{r}
+best_aic_model <- ols_compare_all |>
+  slice_min(AIC, n = 1)
+
+best_moran_model <- ols_compare_all |>
+  slice_min(Abs_Moran_I, n = 1)
+
+best_aic_model
+best_moran_model
+```
+
+### LM test
+
+```{r}
+run_lm_tests <- function(model, listw, model_name) {
+  
+  cat("\n====================================\n")
+  cat("LM tests for model:", model_name, "\n")
+  
+  lm_tests <- lm.RStests(
+    model,
+    listw = listw,
+    test = "all",
+    zero.policy = TRUE
+  )
+  
+  lm_table <- t(sapply(lm_tests, function(x) {
+    c(
+      Statistic = unname(x$statistic),
+      df = unname(x$parameter),
+      p_value = x$p.value
+    )
+  }))
+  
+  lm_table <- as.data.frame(lm_table)
+  lm_table$Test <- rownames(lm_table)
+  rownames(lm_table) <- NULL
+  lm_table <- lm_table[, c("Test", "Statistic", "df", "p_value")]
+  
+  print(lm_table)
+  
+  invisible(lm_table)
+}
+```
+
+```{r}
+linearMod_no_spatial <- ols_results$no_spatial$model
+linearMod_all_spatial_trimmed <- ols_results$all_spatial_trimmed$model
+```
+
+```{r}
+# LM tests for the two OLS models
+lmtests_no_spatial <- run_lm_tests(
+  model = linearMod_no_spatial,
+  listw = ward_wellbeing_nbq_w,
+  model_name = "No spatial"
+)
+
+lmtests_trimmed <- run_lm_tests(
+  model = linearMod_all_spatial_trimmed,
+  listw = ward_wellbeing_nbq_w,
+  model_name = "All spatial trimmed"
+)
+```
+
+### SLM 
+
+```{r}
+run_slm_diagnostics <- function(formula, data, listw, model_name,
+                                nsim = 2999,
+                                method = "eigen",
+                                tol.solve = 1e-10,
+                                fitted_model = NULL) {
+  
+  # fit SLM model
+  slm_model <- if (is.null(fitted_model)) {
+    lagsarlm(
+      formula = formula,
+      data = data,
+      listw = listw,
+      zero.policy = TRUE,
+      method = method,
+      tol.solve = tol.solve
+    )
+  } else {
+    fitted_model
+  }
+  
+  cat("\n====================================\n")
+  cat("Model:", model_name, "\n")
+  cat("Formula:\n")
+  print(formula(slm_model))
+  
+  cat("\nSLM summary:\n")
+  print(summary(slm_model, Nagelkerke = TRUE))
+  
+  cat("\nAIC:\n")
+  print(AIC(slm_model))
+  
+  cat("\nLog-likelihood:\n")
+  print(logLik(slm_model))
+  
+  # residuals
+  slm_resid <- residuals(slm_model)
+  
+  cat("\nDiagnostic plots:\n")
+  par(mfrow = c(2, 2))
+  
+  plot(fitted(slm_model), slm_resid,
+       main = "Residuals vs fitted",
+       xlab = "Fitted values", ylab = "Residuals")
+  abline(h = 0, lty = 2)
+  
+  qqnorm(slm_resid, main = "Normal Q-Q")
+  qqline(slm_resid)
+  
+  hist(slm_resid, main = "Histogram of residuals", xlab = "Residuals")
+  
+  plot(slm_resid, type = "h",
+       main = "Residuals by observation",
+       xlab = "Observation", ylab = "Residual")
+  abline(h = 0, lty = 2)
+  
+  par(mfrow = c(1, 1))
+  
+  cat("\nJarque-Bera test:\n")
+  print(jarque.bera.test(slm_resid))
+  
+  cat("\nResidual Moran's I (Monte Carlo):\n")
+  mc_res <- moran.mc(
+    slm_resid,
+    listw,
+    nsim = nsim,
+    zero.policy = TRUE,
+    alternative = "greater"
+  )
+  print(mc_res)
+  
+  # plot Moran's I simulation
+  plot(mc_res)
+  
+  # save residuals back to sf object 
+  res_col <- paste0("res_", make.names(model_name))
+  data[[res_col]] <- slm_resid
+  
+  cat("\nResidual map:\n")
+  print(qtm(data, res_col))
+  
+  invisible(list(
+    model = slm_model,
+    moran = mc_res,
+    data = data,
+    residual_column = res_col
+  ))
+}
+```
+
+```{r}
+slm_results <- list()
+
+for (nm in names(equations)) {
+  slm_results[[nm]] <- run_slm_diagnostics(
+    formula = equations[[nm]],
+    data = ward_wellbeing,
+    listw = ward_wellbeing_nbq_w,
+    model_name = nm
+  )
+}
+```
+
+
+```{r}
+slm_compare_all <- tibble(
+  Model = names(slm_results),
+  AIC = sapply(slm_results, function(x) AIC(x$model)),
+  Moran_I = sapply(slm_results, function(x) as.numeric(x$moran$statistic))
+) |>
+  mutate(
+    Abs_Moran_I = abs(Moran_I)
+  ) |>
+  arrange(AIC)
+
+slm_compare_all
+```
+
+```{r}
+best_slm_aic <- slm_compare_all |>
+  slice_min(AIC, n = 1)
+
+best_slm_moran <- slm_compare_all |>
+  slice_min(Abs_Moran_I, n = 1)
+
+best_slm_aic
+best_slm_moran
+```
+
+### GWR stuff
+
+```{r}
+run_gwr_diagnostics <- function(formula, data_sp, listw, model_name,
+                                nsim = 2999,
+                                kernel = "gaussian",
+                                adaptive = TRUE,
+                                bw = NULL,
+                                fitted_model = NULL) {
+  
+  # fit GWR model
+  if (is.null(fitted_model)) {
+    
+    if (is.null(bw)) {
+      bw <- bw.gwr(
+        formula,
+        approach = "AICc",
+        adaptive = adaptive,
+        kernel = kernel,
+        data = data_sp
+      )
+    }
+    
+    gwr_model <- gwr.basic(
+      formula,
+      adaptive = adaptive,
+      kernel = kernel,
+      bw = bw,
+      data = data_sp
+    )
+    
+  } else {
+    gwr_model <- fitted_model
+    
+    if (is.null(bw)) {
+      bw <- gwr_model$GW.arguments$bw
+    }
+  }
+  
+  cat("\n====================================\n")
+  cat("Model:", model_name, "\n")
+  cat("Formula:\n")
+  print(formula)
+  
+  cat("\nBandwidth:\n")
+  print(bw)
+  
+  cat("\nKernel:\n")
+  print(kernel)
+  
+  cat("\nGWR diagnostics:\n")
+  cat("AIC:\n")
+  print(gwr_model$GW.diagnostic$AIC)
+  
+  cat("\nAICc:\n")
+  print(gwr_model$GW.diagnostic$AICc)
+  
+  cat("\nR2:\n")
+  print(gwr_model$GW.diagnostic$gw.R2)
+  
+  cat("\nAdjusted R2:\n")
+  print(gwr_model$GW.diagnostic$gwR2.adj)
+  
+  # extract SDF and convert to sf for mapping / residual work
+  gwr_sf <- sf::st_as_sf(gwr_model$SDF)
+  
+  # identify columns
+  nm <- names(gwr_sf)
+  
+  resid_col_found <- nm[grepl("resid|gwr.e|residual", nm, ignore.case = TRUE)]
+  fitted_col_found <- nm[grepl("^pred$|predicted|prediction|yhat|fitted|fit", nm, ignore.case = TRUE)]
+  observed_col_found <- nm[grepl("^y$|^obs$|observed|response", nm, ignore.case = TRUE)]
+  
+  # build residuals
+  if (length(resid_col_found) > 0) {
+    gwr_resid <- gwr_sf[[resid_col_found[1]]]
+  } else if (length(observed_col_found) > 0 && length(fitted_col_found) > 0) {
+    gwr_resid <- gwr_sf[[observed_col_found[1]]] - gwr_sf[[fitted_col_found[1]]]
+  } else {
+    stop("Could not identify GWR residuals from gwr_model$SDF.")
+  }
+  
+  # build fitted values if available
+  if (length(fitted_col_found) > 0) {
+    gwr_fitted <- gwr_sf[[fitted_col_found[1]]]
+  } else if (length(observed_col_found) > 0) {
+    gwr_fitted <- gwr_sf[[observed_col_found[1]]] - gwr_resid
+  } else {
+    gwr_fitted <- seq_along(gwr_resid)
+  }
+  
+  cat("\nDiagnostic plots:\n")
+  par(mfrow = c(2, 2))
+  
+  plot(gwr_fitted, gwr_resid,
+       main = "Residuals vs fitted",
+       xlab = "Fitted values", ylab = "Residuals")
+  abline(h = 0, lty = 2)
+  
+  qqnorm(gwr_resid, main = "Normal Q-Q")
+  qqline(gwr_resid)
+  
+  hist(gwr_resid, main = "Histogram of residuals", xlab = "Residuals")
+  
+  plot(gwr_resid, type = "h",
+       main = "Residuals by observation",
+       xlab = "Observation", ylab = "Residual")
+  abline(h = 0, lty = 2)
+  
+  par(mfrow = c(1, 1))
+  
+  cat("\nJarque-Bera test:\n")
+  print(jarque.bera.test(gwr_resid))
+  
+  cat("\nResidual Moran's I (Monte Carlo):\n")
+  mc_res <- moran.mc(
+    gwr_resid,
+    listw,
+    nsim = nsim,
+    zero.policy = TRUE,
+    alternative = "greater"
+  )
+  print(mc_res)
+  plot(mc_res)
+  
+  # save residuals to sf object 
+  res_col <- paste0("res_", make.names(model_name))
+  gwr_sf[[res_col]] <- gwr_resid
+  
+  cat("\nResidual map:\n")
+  print(qtm(gwr_sf, res_col))
+  
+  invisible(list(
+    model = gwr_model,
+    bw = bw,
+    moran = mc_res,
+    data = gwr_sf,
+    residual_column = res_col
+  ))
+}
+```
+
+```{r}
+#Before we do any analysis for GWR we need to convert our imported sf object into a sp spatial object. As the GWmodel package usually works on sp objects
+#converting the sf polygon into sp object
+ward_wellbeing_sp <- as_Spatial(ward_wellbeing)
+```
+
+```{r}
+gwr_results <- list()
+
+for (nm in names(equations)) {
+  gwr_results[[nm]] <- run_gwr_diagnostics(
+    formula = equations[[nm]],
+    data_sp = ward_wellbeing_sp,
+    listw = ward_wellbeing_nbq_w,
+    model_name = nm
+  )
+}
+```
+
+```{r}
+gwr_compare_all <- tibble(
+  Model = names(gwr_results),
+  AIC = sapply(gwr_results, function(x) x$model$GW.diagnostic$AIC),
+  AICc = sapply(gwr_results, function(x) x$model$GW.diagnostic$AICc),
+  Moran_I = sapply(gwr_results, function(x) as.numeric(x$moran$statistic))
+) |>
+  mutate(
+    Abs_Moran_I = abs(Moran_I)
+  ) |>
+  arrange(AIC)
+
+gwr_compare_all
+```
+
+```{r}
+best_gwr_aic <- gwr_compare_all |>
+  slice_min(AIC, n = 1)
+
+best_gwr_moran <- gwr_compare_all |>
+  slice_min(Abs_Moran_I, n = 1)
+
+best_gwr_aic
+best_gwr_moran
+```
+
+### MGWR - More improvements.
+
+```{r}
+run_mgwr_diagnostics <- function(formula, data_sp, listw, model_name,
+                                 nsim = 2999,
+                                 kernel = "gaussian",
+                                 adaptive = TRUE,
+                                 verbose = TRUE,
+                                 fitted_model = NULL) {
+  
+  # fit MGWR model
+  mgwr_model <- if (is.null(fitted_model)) {
+    gwr.multiscale(
+      formula,
+      adaptive = adaptive,
+      kernel = kernel,
+      data = data_sp,
+      verbose = verbose
+    )
+  } else {
+    fitted_model
+  }
+  
+  cat("\n====================================\n")
+  cat("Model:", model_name, "\n")
+  cat("Formula:\n")
+  print(formula)
+  
+  cat("\nKernel:\n")
+  print(kernel)
+  
+  cat("\nMGWR diagnostics:\n")
+  cat("AIC:\n")
+  print(mgwr_model$GW.diagnostic$AIC)
+  
+  cat("\nAICc:\n")
+  print(mgwr_model$GW.diagnostic$AICc)
+  
+  cat("\nBIC:\n")
+  print(mgwr_model$GW.diagnostic$BIC)
+  
+  cat("\nR2:\n")
+  print(mgwr_model$GW.diagnostic$gw.R2)
+  
+  cat("\nAdjusted R2:\n")
+  print(mgwr_model$GW.diagnostic$gwR2.adj)
+  
+  cat("\nBandwidths by parameter:\n")
+  print(mgwr_model$bws.vars)
+  
+  # extract SDF and convert to sf for mapping / residual work
+  mgwr_sf <- sf::st_as_sf(mgwr_model$SDF)
+  
+  # identify columns
+  nm <- names(mgwr_sf)
+  
+  resid_col_found <- nm[grepl("resid|gwr.e|residual", nm, ignore.case = TRUE)]
+  fitted_col_found <- nm[grepl("^pred$|predicted|prediction|yhat|fitted|fit", nm, ignore.case = TRUE)]
+  observed_col_found <- nm[grepl("^y$|^obs$|observed|response", nm, ignore.case = TRUE)]
+  
+  # build residuals 
+  if (length(resid_col_found) > 0) {
+    mgwr_resid <- mgwr_sf[[resid_col_found[1]]]
+  } else if (length(observed_col_found) > 0 && length(fitted_col_found) > 0) {
+    mgwr_resid <- mgwr_sf[[observed_col_found[1]]] - mgwr_sf[[fitted_col_found[1]]]
+  } else {
+    stop("Could not identify MGWR residuals from mgwr_model$SDF.")
+  }
+  
+  # build fitted values if available
+  if (length(fitted_col_found) > 0) {
+    mgwr_fitted <- mgwr_sf[[fitted_col_found[1]]]
+  } else if (length(observed_col_found) > 0) {
+    mgwr_fitted <- mgwr_sf[[observed_col_found[1]]] - mgwr_resid
+  } else {
+    mgwr_fitted <- seq_along(mgwr_resid)
+  }
+  
+  cat("\nDiagnostic plots:\n")
+  par(mfrow = c(2, 2))
+  
+  plot(mgwr_fitted, mgwr_resid,
+       main = "Residuals vs fitted",
+       xlab = "Fitted values", ylab = "Residuals")
+  abline(h = 0, lty = 2)
+  
+  qqnorm(mgwr_resid, main = "Normal Q-Q")
+  qqline(mgwr_resid)
+  
+  hist(mgwr_resid, main = "Histogram of residuals", xlab = "Residuals")
+  
+  plot(mgwr_resid, type = "h",
+       main = "Residuals by observation",
+       xlab = "Observation", ylab = "Residual")
+  abline(h = 0, lty = 2)
+  
+  par(mfrow = c(1, 1))
+  
+  cat("\nJarque-Bera test:\n")
+  print(jarque.bera.test(mgwr_resid))
+  
+  cat("\nResidual Moran's I (Monte Carlo):\n")
+  mc_res <- moran.mc(
+    mgwr_resid,
+    listw,
+    nsim = nsim,
+    zero.policy = TRUE,
+    alternative = "greater"
+  )
+  print(mc_res)
+  plot(mc_res)
+  
+  # save residuals to sf object 
+  res_col <- paste0("res_", make.names(model_name))
+  mgwr_sf[[res_col]] <- mgwr_resid
+  
+  cat("\nResidual map:\n")
+  print(qtm(mgwr_sf, res_col))
+  
+  invisible(list(
+    model = mgwr_model,
+    moran = mc_res,
+    data = mgwr_sf,
+    residual_column = res_col
+  ))
+}
+```
+
+```{r}
+mgwr_results <- list()
+
+for (nm in names(equations)) {
+  mgwr_results[[nm]] <- run_mgwr_diagnostics(
+    formula = equations[[nm]],
+    data_sp = ward_wellbeing_sp,
+    listw = ward_wellbeing_nbq_w,
+    model_name = nm
+  )
+}
+```
+```{r}
+mgwr_compare_all <- tibble(
+  Model = names(mgwr_results),
+  AIC = sapply(mgwr_results, function(x) x$model$GW.diagnostic$AIC),
+  AICc = sapply(mgwr_results, function(x) x$model$GW.diagnostic$AICc),
+  BIC = sapply(mgwr_results, function(x) x$model$GW.diagnostic$BIC),
+  Moran_I = sapply(mgwr_results, function(x) as.numeric(x$moran$statistic))
+) |>
+  mutate(
+    Abs_Moran_I = abs(Moran_I)
+  ) |>
+  arrange(AIC)
+
+mgwr_compare_all
+```
+
+```{r}
+mgwr_sf <- mgwr_results$all_spatial_trimmed$data
+agwr_sf <- gwr_results$all_spatial_trimmed$data
+
+spatial_vars <- c(
+  "PubTransAccess",
+  "HomesOpenAccessNatGreen",
+  "BrownfieldProp",
+  "RailNoise",
+  "RoadNoise",
+  "PM25_k",
+  "NDVI"
+)
+
+names(mgwr_sf)[grepl("_TV$", names(mgwr_sf))]
+names(agwr_sf)[grepl("_TV$", names(agwr_sf))]
+```
+
+```{r}
+mgwr_sig_maps <- list()
+
+for (v in spatial_vars) {
+  
+  tv_col <- paste0(v, "_TV")
+  
+  tvalMGWR <- mgwr_sf %>%
+    dplyr::select(all_of(tv_col)) %>%
+    st_drop_geometry()
+  
+  mgwrsig <- tvalMGWR[[1]] < -1.96 | tvalMGWR[[1]] > 1.96
+  
+  mgwr_sig_maps[[v]] <- tm_shape(mgwr_sf) +
+    tm_fill(v, midpoint = 0) + tm_style("gray") +
+    tm_layout(legend.position = c("right","top")) +
+    tm_shape(mgwr_sf[mgwrsig, ]) + tm_borders()
+}
+```
+```{r}
+agwr_sig_maps <- list()
+
+for (v in spatial_vars) {
+  
+  tv_col <- paste0(v, "_TV")
+  
+  tvalAGWR <- agwr_sf %>%
+    dplyr::select(all_of(tv_col)) %>%
+    st_drop_geometry()
+  
+  agwrsig <- tvalAGWR[[1]] < -1.96 | tvalAGWR[[1]] > 1.96
+  
+  agwr_sig_maps[[v]] <- tm_shape(agwr_sf) +
+    tm_fill(v, midpoint = 0) + tm_style("gray") +
+    tm_layout(legend.position = c("right","top")) +
+    tm_shape(agwr_sf[agwrsig, ]) + tm_borders()
+}
+```
+
+```{r}
+for (v in spatial_vars) {
+  print(v)
+  print(
+    tmap_arrange(
+      mgwr_sig_maps[[v]],
+      agwr_sig_maps[[v]]
+    )
+  )
+}
+```
+
+```{r}
+
+```
+
+### Summary
+
+```{r}
+get_lm_decision <- function(model, listw) {
+  lm_tests <- lm.RStests(
+    model,
+    listw = listw,
+    test = "all",
+    zero.policy = TRUE
+  )
+  
+  rs_err_p <- lm_tests$RSerr$p.value
+  rs_lag_p <- lm_tests$RSlag$p.value
+  
+  case_when(
+    rs_err_p <= 0.05 & rs_lag_p <= 0.05 ~ "SAC",
+    rs_err_p <= 0.05 & rs_lag_p > 0.05 ~ "Spatial error",
+    rs_err_p > 0.05 & rs_lag_p <= 0.05 ~ "Spatial lag",
+    TRUE ~ "OLS"
+  )
+}
+```
+
+```{r}
+full.summary.table <- bind_rows(
+  tibble(
+    step = 1,
+    equation = names(ols_results),
+    lagrange_decision = sapply(ols_results, function(x) {
+      get_lm_decision(x$model, ward_wellbeing_nbq_w)
+    }),
+    AIC = sapply(ols_results, function(x) AIC(x$model)),
+    mc_global = sapply(ols_results, function(x) as.numeric(x$moran$statistic))
+  ),
+  tibble(
+    step = 2,
+    equation = names(slm_results),
+    lagrange_decision = "spatial lag",
+    AIC = sapply(slm_results, function(x) AIC(x$model)),
+    mc_global = sapply(slm_results, function(x) as.numeric(x$moran$statistic))
+  ),
+  tibble(
+    step = 3,
+    equation = names(gwr_results),
+    lagrange_decision = NA_character_,
+    AIC = sapply(gwr_results, function(x) x$model$GW.diagnostic$AIC),
+    mc_global = sapply(gwr_results, function(x) as.numeric(x$moran$statistic))
+  ),
+  tibble(
+    step = 4,
+    equation = names(mgwr_results),
+    lagrange_decision = NA_character_,
+    AIC = sapply(mgwr_results, function(x) x$model$GW.diagnostic$AIC),
+    mc_global = sapply(mgwr_results, function(x) as.numeric(x$moran$statistic))
+  )
+)
+
+full.summary.table
+```
+
+```{r}
+
+```
