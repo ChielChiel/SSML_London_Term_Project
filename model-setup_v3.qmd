@@ -208,6 +208,7 @@ ggplot(ward_wellbeing) +
   labs(title = "Subjective wellbeing clusters") + 
   theme (panel.background = element_rect(fill='transparent'))
 ```
+
 ```{r}
 # correlation matrix for candidate modelling variables
 corr_vars <- ward_wellbeing |>
@@ -255,6 +256,7 @@ corr_pairs <- as.data.frame(as.table(corr_mat)) |>
 
 corr_pairs
 ```
+
 ### Equations
 
 ```{r}
@@ -427,7 +429,6 @@ for (nm in names(equations)) {
 }
 ```
 
-
 ```{r}
 ols_compare_all <- tibble(
   Model = names(ols_results),
@@ -507,28 +508,42 @@ lmtests_trimmed <- run_lm_tests(
 )
 ```
 
-### SLM 
+### SLM
 
 ```{r}
 run_slm_diagnostics <- function(formula, data, listw, model_name,
                                 nsim = 2999,
                                 method = "eigen",
                                 tol.solve = 1e-10,
-                                fitted_model = NULL) {
+                                fitted_model = NULL,
+                                model) {
   
   # fit SLM model
-  slm_model <- if (is.null(fitted_model)) {
-    lagsarlm(
-      formula = formula,
-      data = data,
-      listw = listw,
-      zero.policy = TRUE,
-      method = method,
-      tol.solve = tol.solve
-    )
-  } else {
-    fitted_model
-  }
+  if (model == "lag"){
+    slm_model <- if (is.null(fitted_model)) {
+      lagsarlm(
+        formula = formula,
+        data = data,
+        listw = listw,
+        zero.policy = TRUE,
+        method = method,
+        tol.solve = tol.solve
+      )
+    } else {
+      fitted_model
+    }}else if (model == "sac"){
+      slm_model <- if (is.null(fitted_model)) {
+        sacsarlm(
+          formula = formula,
+          data = data,
+          listw = listw,
+          zero.policy = TRUE,
+          method = method,
+          tol.solve = tol.solve
+        )
+      } else {
+        fitted_model
+  }}
   
   cat("\n====================================\n")
   cat("Model:", model_name, "\n")
@@ -601,19 +616,30 @@ run_slm_diagnostics <- function(formula, data, listw, model_name,
 
 ```{r}
 slm_results <- list()
+slm_results_sac <- list()
 
 for (nm in names(equations)) {
   slm_results[[nm]] <- run_slm_diagnostics(
     formula = equations[[nm]],
     data = ward_wellbeing,
     listw = ward_wellbeing_nbq_w,
-    model_name = nm
+    model_name = nm,
+    model = "lag"
+  )
+  slm_results_sac[[nm]] <- run_slm_diagnostics(
+    formula = equations[[nm]],
+    data = ward_wellbeing,
+    listw = ward_wellbeing_nbq_w,
+    model_name = nm,
+    model = "sac"
   )
 }
+
+
 ```
 
-
 ```{r}
+#Best of the lag models, see table at the end of the script for full comparison
 slm_compare_all <- tibble(
   Model = names(slm_results),
   AIC = sapply(slm_results, function(x) AIC(x$model)),
@@ -965,6 +991,7 @@ for (nm in names(equations)) {
   )
 }
 ```
+
 ```{r}
 mgwr_compare_all <- tibble(
   Model = names(mgwr_results),
@@ -1018,6 +1045,7 @@ for (v in spatial_vars) {
     tm_shape(mgwr_sf[mgwrsig, ]) + tm_borders()
 }
 ```
+
 ```{r}
 agwr_sig_maps <- list()
 
@@ -1086,28 +1114,40 @@ full.summary.table <- bind_rows(
       get_lm_decision(x$model, ward_wellbeing_nbq_w)
     }),
     AIC = sapply(ols_results, function(x) AIC(x$model)),
-    mc_global = sapply(ols_results, function(x) as.numeric(x$moran$statistic))
+    mc_global = sapply(ols_results, function(x) as.numeric(x$moran$statistic)),
+    mc_global_pval = sapply(ols_results, function(x) as.numeric(x$moran$p.value))
   ),
   tibble(
     step = 2,
     equation = names(slm_results),
     lagrange_decision = "spatial lag",
     AIC = sapply(slm_results, function(x) AIC(x$model)),
-    mc_global = sapply(slm_results, function(x) as.numeric(x$moran$statistic))
+    mc_global = sapply(slm_results, function(x) as.numeric(x$moran$statistic)),
+    mc_global_pval = sapply(slm_results, function(x) as.numeric(x$moran$p.value))
+  ),
+  tibble(
+    step = 2,
+    equation = names(slm_results_sac),
+    lagrange_decision = "SAC",
+    AIC = sapply(slm_results_sac, function(x) AIC(x$model)),
+    mc_global = sapply(slm_results_sac, function(x) as.numeric(x$moran$statistic)),
+    mc_global_pval = sapply(slm_results_sac, function(x) as.numeric(x$moran$p.value))
   ),
   tibble(
     step = 3,
     equation = names(gwr_results),
     lagrange_decision = NA_character_,
     AIC = sapply(gwr_results, function(x) x$model$GW.diagnostic$AIC),
-    mc_global = sapply(gwr_results, function(x) as.numeric(x$moran$statistic))
+    mc_global = sapply(gwr_results, function(x) as.numeric(x$moran$statistic)),
+    mc_global_pval = sapply(gwr_results, function(x) as.numeric(x$moran$p.value))
   ),
   tibble(
     step = 4,
     equation = names(mgwr_results),
     lagrange_decision = NA_character_,
     AIC = sapply(mgwr_results, function(x) x$model$GW.diagnostic$AIC),
-    mc_global = sapply(mgwr_results, function(x) as.numeric(x$moran$statistic))
+    mc_global = sapply(mgwr_results, function(x) as.numeric(x$moran$statistic)),
+    mc_global_pval = sapply(mgwr_results, function(x) as.numeric(x$moran$p.value))
   )
 )
 
