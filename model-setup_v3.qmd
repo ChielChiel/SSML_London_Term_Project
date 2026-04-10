@@ -1,6 +1,8 @@
 ---
 title: "model-setup"
 format: html
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r}
@@ -9,6 +11,8 @@ if (!require("easypackages")) install.packages("easypackages") #easy package man
 #install and load libraries
 #In this practical we need an additional package to run the GWR models, this package is called "GWmodel"
 easypackages::packages ("sf", "sp", "spdep", "spatialreg", "GWmodel", "tmap", "mapview", "car", "RColorBrewer", "cowplot", "leafsync", "leaflet.extras2", "mapview", "tidyverse", "readr", "lmtest", "tseries")
+
+setwd(this.path::here())
 ```
 
 ## Data wrangling for modelling
@@ -1041,8 +1045,12 @@ for (v in spatial_vars) {
   
   mgwr_sig_maps[[v]] <- tm_shape(mgwr_sf) +
     tm_fill(v, midpoint = 0) + tm_style("gray") +
-    tm_layout(legend.position = c("right","top")) +
-    tm_shape(mgwr_sf[mgwrsig, ]) + tm_borders()
+    tm_layout(legend.position = c("left", "top"),
+              bg.color = "white",
+              frame = F) +
+    tm_shape(mgwr_sf[mgwrsig, ]) + tm_borders()+
+    tm_compass()+
+    tm_scalebar()
 }
 ```
 
@@ -1071,16 +1079,25 @@ for (v in spatial_vars) {
   print(v)
   print(
     tmap_arrange(
-      mgwr_sig_maps[[v]],
-      agwr_sig_maps[[v]]
+      mgwr_sig_maps[[v]]
     )
   )
 }
 ```
+```{r}
+tmap_arrange(mgwr_sig_maps)
+```
 
 ```{r}
-
+tmap_arrange(mgwr_sig_maps[c(3:6)],
+             ncol = 1)
 ```
+
+```{r}
+tmap_arrange(mgwr_sig_maps[c(1, 2, 7)],
+             ncol = 1)
+```
+
 
 ### Summary
 
@@ -1155,5 +1172,120 @@ full.summary.table
 ```
 
 ```{r}
+best.model <- gwr.multiscale(
+      equations$all_spatial_trimmed,
+      adaptive = TRUE,
+      kernel = "gaussian",
+      data = ward_wellbeing_sp,
+      verbose = TRUE
+    )
 
+```
+
+
+
+```{r}
+best.model.sf = as.data.frame(st_as_sf(best.model$SDF))
+```
+
+
+```{r}
+new_coef <- apply(best.model.sf[1:16], 2, median)
+median_model <- best.model$lm
+median_model$coefficients <- new_coef
+
+
+first_quantile <- apply(best.model$lm$model, 2, function(x) quantile(x, probs = 0.25))
+third_quantile <- apply(best.model$lm$model, 2, function(x) quantile(x, probs = 0.75))
+
+mean <- apply(best.model$lm$model, 2, mean)
+mean_matrix <- as.matrix(t(mean))
+mean_matrix <- do.call(rbind, replicate(16, mean_matrix, simplify=FALSE))
+#rownames(mean_matrix) <- colnames(mean_matrix)
+
+diag(mean_matrix) <- first_quantile
+
+
+pred_first_quantile <- predict(median_model, newdata = data.frame(mean_matrix))
+
+diag(mean_matrix) <- third_quantile
+
+pred_third_quantile <- predict(median_model, newdata = data.frame(mean_matrix))
+
+diff_wellbeing_quantiles <- pred_third_quantile - pred_first_quantile
+
+names(diff_wellbeing_quantiles) <- names(first_quantile)
+
+long_diff_wellbeing <- diff_wellbeing_quantiles|>
+  t()|>
+  as.data.frame()|>
+  pivot_longer(cols = everything(), values_to = "Diff", names_to = "Predictors")|>
+  filter(Predictors != "SubWellBeing")|>
+  arrange(Diff)
+  
+```
+
+
+
+```{r}
+ggplot(long_diff_wellbeing)+
+  geom_col(aes(x = Predictors, y = Diff))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+```
+
+
+
+```{r}
+second.best.model <- gwr.multiscale(
+      equations$spatial_literature,
+      adaptive = TRUE,
+      kernel = "gaussian",
+      data = ward_wellbeing_sp,
+      verbose = TRUE
+    )
+
+```
+
+
+```{r}
+best.sac.model <- sacsarlm(
+          formula = equations$spatial_UnauthAbsence,
+          data = ward_wellbeing,
+          listw = ward_wellbeing_nbq_w,
+          zero.policy = TRUE,
+          method = "eigen",
+          tol.solve = 1e-10
+        )
+best.ols.model <- model <- lm(equations$all_spatial_trimmed, data = ward_wellbeing)
+```
+
+
+### Figures Appendix D
+```{r}
+
+#PM2.5
+tm_shape(ward_wellbeing) +
+  tm_fill("PM25_k", midpoint = 0) + tm_style("gray") +
+  tm_layout(legend.position = c("left", "top"),
+            bg.color = "white",
+            frame = F,
+            inner.margins = c(0, 0.5, 0, 0.3)) +
+  tm_borders()+
+  tm_compass()+
+  tm_scalebar()
+  
+
+#NDVI
+tm_shape(ward_wellbeing) +
+  tm_fill("NDVI", midpoint = 0) + tm_style("gray") +
+  tm_layout(legend.position = c("left", "top"),
+            bg.color = "white",
+            frame = F,
+            inner.margins = c(0, 0.4, 0, 0.4)) +
+  tm_borders()+
+  tm_compass()+
+  tm_scalebar()
 ```
