@@ -1047,8 +1047,9 @@ for (v in spatial_vars) {
     tm_fill(v, midpoint = 0) + tm_style("gray") +
     tm_layout(legend.position = c("left", "top"),
               bg.color = "white",
-              frame = F) +
-    tm_shape(mgwr_sf[mgwrsig, ]) + tm_borders()+
+              frame = F,
+              inner.margins = c(0, 0.4, 0, 0.4)) +
+    #tm_borders()+
     tm_compass()+
     tm_scalebar()
 }
@@ -1084,16 +1085,14 @@ for (v in spatial_vars) {
   )
 }
 ```
-```{r}
-tmap_arrange(mgwr_sig_maps)
-```
+
+
 
 ```{r}
+#for poster
 tmap_arrange(mgwr_sig_maps[c(3:6)],
              ncol = 1)
-```
 
-```{r}
 tmap_arrange(mgwr_sig_maps[c(1, 2, 7)],
              ncol = 1)
 ```
@@ -1264,6 +1263,10 @@ best.ols.model <- model <- lm(equations$all_spatial_trimmed, data = ward_wellbei
 
 
 ### Figures Appendix D
+```{r}
+tmap_arrange(mgwr_sig_maps)
+```
+
 ```{r}
 
 #PM2.5
